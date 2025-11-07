@@ -8,7 +8,7 @@ export async function GET(request: Request) {
     const offset = Number.parseInt(searchParams.get("offset") || "0")
     const status = searchParams.get("status")
 
-    const supabase = createServiceRoleClient()
+    const supabase = await createServiceRoleClient()
 
     // Build query
     let query = supabase
