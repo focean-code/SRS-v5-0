@@ -84,6 +84,14 @@ export default function AdminDashboard() {
   const [filterDateTo, setFilterDateTo] = useState<string>("")
   const [downloadingCSV, setDownloadingCSV] = useState(false)
 
+  const [rewards, setRewards] = useState<any[]>([])
+  const [rewardsLoading, setRewardsLoading] = useState(false)
+  const [rewardsTotal, setRewardsTotal] = useState(0)
+  const [rewardsPage, setRewardsPage] = useState(0)
+  const [rewardsLimit] = useState(50)
+  const [filterRewardStatus, setFilterRewardStatus] = useState<string | undefined>(undefined)
+  const [rewardsStats, setRewardsStats] = useState<any>(null)
+
   const [webhookTestLoading, setWebhookTestLoading] = useState(false)
   const [webhookTestResult, setWebhookTestResult] = useState<any>(null)
 
@@ -104,6 +112,10 @@ export default function AdminDashboard() {
     if (activeTab === "responses") {
       fetchCampaigns()
       fetchResponses()
+    }
+
+    if (activeTab === "rewards") {
+      fetchRewards()
     }
   }, [activeTab])
 
@@ -371,7 +383,7 @@ export default function AdminDashboard() {
         quantity: quantityNum,
         batchNumber: batchNumberNum,
       }
-      
+
       // Only include campaignId if it's defined (not undefined or null)
       if (selectedCampaignId) {
         requestBody.campaignId = selectedCampaignId
@@ -393,24 +405,22 @@ export default function AdminDashboard() {
         // Extract validation errors if available
         const errorMessage = errorData.error || "Failed to generate QR codes"
         const validationErrors = errorData.meta?.errors || errorData.meta?.details
-        const detailedError = validationErrors
-          ? `${errorMessage}: ${JSON.stringify(validationErrors)}`
-          : errorMessage
+        const detailedError = validationErrors ? `${errorMessage}: ${JSON.stringify(validationErrors)}` : errorMessage
         throw new Error(detailedError)
       }
 
       const data = await response.json()
-      console.log("QR Generation - Success response", { 
+      console.log("QR Generation - Success response", {
         fullResponse: data,
         qrCodesCount: data.data?.qrCodes?.length || data.qrCodes?.length || 0,
         totalCount: data.data?.totalCount || data.totalCount || 0,
-        message: data.message || data.data?.message
+        message: data.message || data.data?.message,
       })
-      
+
       // Handle both response formats: { data: { qrCodes: [...] } } and { qrCodes: [...] }
       const qrCodes = data.data?.qrCodes || data.qrCodes || []
       const totalCount = data.data?.totalCount || data.totalCount || qrCodes.length
-      
+
       setGeneratedQRs(qrCodes)
       setTotalQRCount(totalCount)
       setLastBatchInfo({ skuId: finalSkuId, batchNumber: batchNumberNum })
@@ -667,6 +677,41 @@ export default function AdminDashboard() {
     }
   }
 
+  const fetchRewards = async () => {
+    setRewardsLoading(true)
+    try {
+      const params = new URLSearchParams({
+        limit: rewardsLimit.toString(),
+        offset: (rewardsPage * rewardsLimit).toString(),
+      })
+
+      if (filterRewardStatus && filterRewardStatus !== "all") {
+        params.append("status", filterRewardStatus)
+      }
+
+      const response = await fetch(`/api/rewards/list?${params}`)
+      if (response.ok) {
+        const data = await response.json()
+        setRewards(data.rewards || [])
+        setRewardsTotal(data.total || 0)
+        setRewardsStats(data.stats || null)
+      } else {
+        setMessage({ type: "error", text: "Failed to load rewards" })
+      }
+    } catch (error) {
+      console.error("Failed to fetch rewards:", error)
+      setMessage({ type: "error", text: "Failed to load rewards" })
+    } finally {
+      setRewardsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === "rewards") {
+      fetchRewards()
+    }
+  }, [rewardsPage, filterRewardStatus])
+
   const handleProcessRewards = async () => {
     setProcessingRewards(true)
     setMessage(null)
@@ -688,6 +733,7 @@ export default function AdminDashboard() {
         text: `Rewards processing triggered. ${successful ? `Successful: ${successful}.` : ""}`,
       })
       await fetchAnalytics()
+      await fetchRewards()
     } catch (error) {
       console.error("Process rewards error:", error)
       setMessage({ type: "error", text: error instanceof Error ? error.message : "Failed to process rewards" })
@@ -1467,10 +1513,57 @@ export default function AdminDashboard() {
                 <CardDescription>Process and track customer rewards</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="text-center py-8">
-                  <p className="text-gray-600 mb-4">
-                    Rewards are automatically processed and sent via Africa's Talking
-                  </p>
+                {/* Stats Summary */}
+                {rewardsStats && (
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+                    <div className="p-4 bg-gray-50 rounded-lg">
+                      <p className="text-sm text-gray-600 mb-1">Total Rewards</p>
+                      <p className="text-2xl font-bold text-gray-900">{rewardsStats.total}</p>
+                    </div>
+                    <div className="p-4 bg-yellow-50 rounded-lg">
+                      <p className="text-sm text-gray-600 mb-1">Pending</p>
+                      <p className="text-2xl font-bold text-yellow-600">{rewardsStats.pending}</p>
+                    </div>
+                    <div className="p-4 bg-blue-50 rounded-lg">
+                      <p className="text-sm text-gray-600 mb-1">Processing</p>
+                      <p className="text-2xl font-bold text-blue-600">{rewardsStats.processing}</p>
+                    </div>
+                    <div className="p-4 bg-green-50 rounded-lg">
+                      <p className="text-sm text-gray-600 mb-1">Sent</p>
+                      <p className="text-2xl font-bold text-green-600">{rewardsStats.sent}</p>
+                    </div>
+                    <div className="p-4 bg-red-50 rounded-lg">
+                      <p className="text-sm text-gray-600 mb-1">Failed</p>
+                      <p className="text-2xl font-bold text-red-600">{rewardsStats.failed}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Filters and Actions */}
+                <div className="flex justify-between items-center mb-6">
+                  <div className="flex items-center gap-4">
+                    <Label htmlFor="filter-reward-status" className="text-sm font-semibold">
+                      Status:
+                    </Label>
+                    <Select
+                      value={filterRewardStatus || "all"}
+                      onValueChange={(val) => {
+                        setFilterRewardStatus(val === "all" ? undefined : val)
+                        setRewardsPage(0)
+                      }}
+                    >
+                      <SelectTrigger id="filter-reward-status" className="w-40">
+                        <SelectValue placeholder="All statuses" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All statuses</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="processing">Processing</SelectItem>
+                        <SelectItem value="sent">Sent</SelectItem>
+                        <SelectItem value="failed">Failed</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <Button onClick={handleProcessRewards} disabled={processingRewards}>
                     {processingRewards ? (
                       <>
@@ -1478,10 +1571,121 @@ export default function AdminDashboard() {
                         Processing...
                       </>
                     ) : (
-                      "Process Pending Rewards"
+                      <>
+                        <Zap className="mr-2 h-4 w-4" />
+                        Process Pending Rewards
+                      </>
                     )}
                   </Button>
                 </div>
+
+                {/* Rewards Table */}
+                {rewardsLoading ? (
+                  <div className="flex justify-center py-12">
+                    <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+                  </div>
+                ) : rewards.length === 0 ? (
+                  <div className="text-center py-12 text-gray-500">
+                    <Gift className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                    <p className="text-lg font-medium">No rewards found</p>
+                    <p className="text-sm">Rewards will appear here when customers submit feedback</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-100 border-b-2 border-gray-200">
+                          <tr>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-700">Date</th>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-700">Customer</th>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-700">Product</th>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-700">Reward</th>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-700">Transaction ID</th>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-700">Sent At</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                          {rewards.map((reward) => (
+                            <tr key={reward.id} className="hover:bg-gray-50">
+                              <td className="px-4 py-3 text-gray-600">
+                                {new Date(reward.created_at).toLocaleDateString()}
+                                <br />
+                                <span className="text-xs text-gray-400">
+                                  {new Date(reward.created_at).toLocaleTimeString()}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="font-medium text-gray-900">
+                                  {reward.feedback?.customer_name || "Anonymous"}
+                                </div>
+                                <div className="text-xs text-gray-500">{reward.customer_phone}</div>
+                              </td>
+                              <td className="px-4 py-3 text-gray-700">
+                                {reward.qr_codes?.product_skus?.products?.name || "N/A"}
+                                <br />
+                                <span className="text-xs text-gray-500">
+                                  {reward.qr_codes?.product_skus?.weight || ""}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="font-medium text-gray-900">{reward.reward_name || "Data Bundle"}</div>
+                                <div className="text-xs text-gray-500">{reward.amount} MB</div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <span
+                                  className={`px-2 py-1 text-xs rounded-full ${
+                                    reward.status === "sent"
+                                      ? "bg-green-100 text-green-800"
+                                      : reward.status === "processing"
+                                        ? "bg-blue-100 text-blue-800"
+                                        : reward.status === "failed"
+                                          ? "bg-red-100 text-red-800"
+                                          : "bg-yellow-100 text-yellow-800"
+                                  }`}
+                                >
+                                  {reward.status}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-xs font-mono text-gray-600">
+                                {reward.transaction_id || "-"}
+                              </td>
+                              <td className="px-4 py-3 text-gray-600 text-xs">
+                                {reward.sent_at ? new Date(reward.sent_at).toLocaleString() : "-"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Pagination */}
+                    <div className="flex justify-between items-center mt-6 pt-4 border-t">
+                      <p className="text-sm text-gray-600">
+                        Showing {rewardsPage * rewardsLimit + 1} to{" "}
+                        {Math.min((rewardsPage + 1) * rewardsLimit, rewardsTotal)} of {rewardsTotal} rewards
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setRewardsPage(Math.max(0, rewardsPage - 1))}
+                          disabled={rewardsPage === 0}
+                        >
+                          Previous
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setRewardsPage(rewardsPage + 1)}
+                          disabled={(rewardsPage + 1) * rewardsLimit >= rewardsTotal}
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
