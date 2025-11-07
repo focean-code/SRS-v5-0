@@ -51,12 +51,12 @@ All endpoints correctly implement:
 
 ## Environment Variables Required
 
-```env
+\`\`\`env
 # REQUIRED - System will throw errors if missing
 AFRICAS_TALKING_API_KEY=your_real_api_key
 AFRICAS_TALKING_USERNAME=your_real_username
 AFRICAS_TALKING_PRODUCT_NAME=Darajaplus  # Optional, defaults to "Darajaplus"
-```
+\`\`\`
 
 ## API Endpoint
 
@@ -67,11 +67,11 @@ All requests are made to this real endpoint. No sandbox or mock endpoints are us
 ## Error Handling
 
 If API credentials are missing:
-```
+\`\`\`
 ❌ Africa's Talking API key not configured. 
    Please set AFRICAS_TALKING_API_KEY environment variable. 
    This function sends REAL data bundles.
-```
+\`\`\`
 
 The system will **NOT** proceed without valid credentials.
 
@@ -110,4 +110,3 @@ All reward processing functions:
 - Store real transaction IDs
 - Handle real API responses
 - Charge your Africa's Talking account
-
