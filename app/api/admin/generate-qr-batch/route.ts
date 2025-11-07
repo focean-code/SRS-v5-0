@@ -1,6 +1,5 @@
 import { generateQRBatch } from "@/lib/qr-utils"
-import { createServerClient } from "@supabase/ssr"
-import { cookies } from "next/headers"
+import { createClient } from "@/lib/supabase-server"
 import { qrBatchSchema } from "@/lib/validation"
 import { successResponse, errorResponse, validationErrorResponse } from "@/lib/api-response"
 import { logger } from "@/lib/logger"
@@ -8,24 +7,7 @@ import { logger } from "@/lib/logger"
 // Function to verify admin authentication using Supabase
 async function verifyAdminAuth() {
   try {
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options)
-            })
-          },
-        },
-      },
-    )
-
+    const supabase = await createClient()
     const {
       data: { user },
     } = await supabase.auth.getUser()

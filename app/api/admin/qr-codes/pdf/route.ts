@@ -1,29 +1,11 @@
 import { createServiceRoleClient } from "@/lib/supabase-server"
 import type { NextRequest } from "next/server"
 import QRCode from "qrcode"
-import { createServerClient } from "@supabase/ssr"
-import { cookies } from "next/headers"
+import { createClient } from "@/lib/supabase-server"
 
 async function verifyAdminSession() {
   try {
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options)
-            })
-          },
-        },
-      },
-    )
-
+    const supabase = await createClient()
     const {
       data: { user },
     } = await supabase.auth.getUser()
@@ -229,14 +211,14 @@ export async function GET(req: NextRequest) {
         displayedRewardAmount = 150 // Customer receives 3×50MB = 150MB total
       }
 
-      console.log("QR Card Data:", { 
-        displayedRewardAmount, 
-        weight, 
-        productName, 
-        rewardDescription, 
+      console.log("QR Card Data:", {
+        displayedRewardAmount,
+        weight,
+        productName,
+        rewardDescription,
         url: qr.url,
         dbRewardAmount: sku.reward_amount,
-        note: "Displayed amount matches total bundles customer receives"
+        note: "Displayed amount matches total bundles customer receives",
       })
 
       try {
