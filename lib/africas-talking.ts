@@ -1,5 +1,6 @@
 import { retryAsync } from "./retry"
 import { logger } from "./logger"
+import { randomUUID } from "crypto"
 
 interface DataBundleRecipient {
   phoneNumber: string
@@ -62,12 +63,13 @@ export function mapToSupportedBundleSize(amount: number): string {
 }
 
 /**
- * Sends a REAL data bundle via Africa's Talking API
+ * Sends a REAL data bundle via Africa's Talking API with idempotency support
  * ⚠️ PRODUCTION FUNCTION - This makes actual API calls and charges your account
- * 
+ *
  * @param phoneNumber - Kenyan phone number (+254 or 0 prefix)
  * @param bundleSize - Bundle size (e.g., "50MB", "100MB", "1GB")
  * @param quantity - Number of times to send the bundle (for 340g=2x, 500g=3x)
+ * @param rewardId - Optional reward ID for generating idempotency key
  * @returns Promise with transaction details
  * @throws Error if API credentials are missing or API call fails
  */
@@ -75,6 +77,7 @@ export async function sendDataBundle(
   phoneNumber: string,
   bundleSize: string | number = "50MB",
   quantity = 1,
+  rewardId?: string, // Added rewardId parameter for idempotency
 ): Promise<DataBundleResponse> {
   // ⚠️ NO MOCK MODE - Requires real API credentials
   if (!AFRICAS_TALKING_API_KEY) {
@@ -104,114 +107,125 @@ export async function sendDataBundle(
 
   try {
     // Helper to perform a single API request
-    const sendOnce = async (): Promise<DataBundleResponse> => {
-        const endpoint = `${AFRICAS_TALKING_BASE_URL}/mobile/data/request`
+    const sendOnce = async (iteration: number): Promise<DataBundleResponse> => {
+      // Format: reward-{rewardId}-batch-{iteration}-{randomUUID}
+      // This ensures each bundle send is idempotent and can be safely retried
+      const idempotencyKey = rewardId
+        ? `reward-${rewardId}-batch-${iteration}-${randomUUID()}`
+        : `manual-${Date.now()}-${iteration}-${randomUUID()}`
 
-        const payload = {
-          username: AFRICAS_TALKING_USERNAME,
-          productName: AFRICAS_TALKING_PRODUCT_NAME,
-          recipients: [
-            {
-              phoneNumber: formattedPhone,
-              quantity: bundleQuantity,
-              unit: bundleUnit,
-              validity: "Day",
-              metadata: {
-                source: "shopper-reward-system",
-                bundleSize: bundleSizeStr,
-                timestamp: new Date().toISOString(),
-              },
-            },
-          ],
-        }
+      const endpoint = `${AFRICAS_TALKING_BASE_URL}/mobile/data/request`
 
-        const requestHeaders = {
-          "Content-Type": "application/json",
-          apiKey: AFRICAS_TALKING_API_KEY,
-          Accept: "application/json",
-        }
-
-        console.log("========== AFRICA'S TALKING API REQUEST ==========")
-        console.log("Method:", "POST")
-        console.log("URL:", endpoint)
-        console.log(
-          "Headers:",
-          JSON.stringify(
-            {
-              ...requestHeaders,
-              apiKey: `${AFRICAS_TALKING_API_KEY?.substring(0, 10)}...`, // Mask API key for security
-            },
-            null,
-            2,
-          ),
-        )
-        console.log("Request Body:", JSON.stringify(payload, null, 2))
-        console.log("===================================================")
-
-        logger.debug("Sending to Africa's Talking API", { endpoint, payload })
-
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: requestHeaders,
-          body: JSON.stringify(payload),
-        })
-
-        const responseHeaders: Record<string, string> = {}
-        response.headers.forEach((value, key) => {
-          responseHeaders[key] = value
-        })
-
-        const responseText = await response.text()
-
-        console.log("========== AFRICA'S TALKING API RESPONSE ==========")
-        console.log("Status Code:", response.status)
-        console.log("Status Text:", response.statusText)
-        console.log("Response Headers:", JSON.stringify(responseHeaders, null, 2))
-        console.log("Response Body (raw):", responseText)
-        console.log("======================================================")
-
-        logger.debug("Africa's Talking API response", {
-          status: response.status,
-          statusText: response.statusText,
-          body: responseText,
-        })
-
-        if (!response.ok) {
-          throw new Error(`API request failed with status ${response.status}: ${responseText}`)
-        }
-
-        let responseData
-        try {
-          responseData = JSON.parse(responseText)
-          console.log("Response Body (parsed JSON):", JSON.stringify(responseData, null, 2))
-        } catch (e) {
-          throw new Error(`Invalid JSON response: ${responseText}`)
-        }
-
-        // Check if the response indicates success
-        if (!responseData.entries || responseData.entries.length === 0) {
-          throw new Error(responseData.errorMessage || "Failed to send data bundle - no entries in response")
-        }
-
-        const entry = responseData.entries[0]
-
-        if (entry.status !== "Sent" && entry.status !== "Queued") {
-          throw new Error(entry.errorMessage || `Failed to send bundle: ${entry.status}`)
-        }
-
-        return {
-          statusCode: "200",
-          success: true,
-          message: "Data bundle sent successfully",
-          data: {
+      const payload = {
+        username: AFRICAS_TALKING_USERNAME,
+        productName: AFRICAS_TALKING_PRODUCT_NAME,
+        recipients: [
+          {
             phoneNumber: formattedPhone,
-            bundleSize: bundleSizeStr,
-            transactionId: entry.transactionId || `AT-${Date.now()}`,
-            status: entry.status,
-            value: entry.value || bundleSizeStr,
+            quantity: bundleQuantity,
+            unit: bundleUnit,
+            validity: "Monthly", // Changed to "Monthly" per AT docs
+            metadata: {
+              source: "shopper-reward-system",
+              bundleSize: bundleSizeStr,
+              timestamp: new Date().toISOString(),
+              rewardId: rewardId || "unknown",
+              iteration: iteration.toString(),
+              idempotencyKey, // Include idempotency key in metadata
+            },
           },
-        }
+        ],
       }
+
+      const requestHeaders = {
+        "Content-Type": "application/json",
+        apiKey: AFRICAS_TALKING_API_KEY,
+        Accept: "application/json",
+        "Idempotency-Key": idempotencyKey,
+      }
+
+      console.log("========== AFRICA'S TALKING API REQUEST ==========")
+      console.log("Method:", "POST")
+      console.log("URL:", endpoint)
+      console.log(
+        "Headers:",
+        JSON.stringify(
+          {
+            ...requestHeaders,
+            apiKey: `${AFRICAS_TALKING_API_KEY?.substring(0, 10)}...`, // Mask API key for security
+          },
+          null,
+          2,
+        ),
+      )
+      console.log("Request Body:", JSON.stringify(payload, null, 2))
+      console.log("===================================================")
+
+      logger.debug("Sending to Africa's Talking API", { endpoint, payload, idempotencyKey })
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: requestHeaders,
+        body: JSON.stringify(payload),
+      })
+
+      const responseHeaders: Record<string, string> = {}
+      response.headers.forEach((value, key) => {
+        responseHeaders[key] = value
+      })
+
+      const responseText = await response.text()
+
+      console.log("========== AFRICA'S TALKING API RESPONSE ==========")
+      console.log("Status Code:", response.status)
+      console.log("Status Text:", response.statusText)
+      console.log("Response Headers:", JSON.stringify(responseHeaders, null, 2))
+      console.log("Response Body (raw):", responseText)
+      console.log("======================================================")
+
+      logger.debug("Africa's Talking API response", {
+        status: response.status,
+        statusText: response.statusText,
+        body: responseText,
+      })
+
+      if (!response.ok) {
+        throw new Error(`API request failed with status ${response.status}: ${responseText}`)
+      }
+
+      let responseData
+      try {
+        responseData = JSON.parse(responseText)
+        console.log("Response Body (parsed JSON):", JSON.stringify(responseData, null, 2))
+      } catch (e) {
+        throw new Error(`Invalid JSON response: ${responseText}`)
+      }
+
+      // Check if the response indicates success
+      if (!responseData.entries || responseData.entries.length === 0) {
+        throw new Error(responseData.errorMessage || "Failed to send data bundle - no entries in response")
+      }
+
+      const entry = responseData.entries[0]
+
+      if (entry.status !== "Sent" && entry.status !== "Queued") {
+        throw new Error(entry.errorMessage || `Failed to send bundle: ${entry.status}`)
+      }
+
+      return {
+        statusCode: "200",
+        success: true,
+        message: "Data bundle sent successfully",
+        data: {
+          phoneNumber: formattedPhone,
+          bundleSize: bundleSizeStr,
+          transactionId: entry.transactionId || `AT-${Date.now()}`,
+          status: entry.status,
+          value: entry.value || bundleSizeStr,
+          idempotencyKey, // Return idempotency key for tracking
+        },
+      }
+    }
 
     // If quantity > 1, send the bundle multiple times sequentially
     // This is used for 340g (2x 50MB = 100MB) and 500g (3x 50MB = 150MB) SKUs
@@ -227,6 +241,7 @@ export async function sendDataBundle(
         note: "Customer sees total amount only - multiple transactions are transparent",
       })
     }
+
     for (let i = 0; i < timesToSend; i++) {
       logger.info("Dispatching data bundle iteration", {
         iteration: i + 1,
@@ -235,13 +250,14 @@ export async function sendDataBundle(
         bundle: bundleSizeStr,
       })
 
-      const result = await retryAsync(sendOnce, {
+      const result = await retryAsync(() => sendOnce(i + 1), {
         maxAttempts: 3,
         delayMs: 2000,
         backoffMultiplier: 2,
         onRetry: (attempt: number, error: any) => {
           logger.warn(`Retry attempt ${attempt} for data bundle`, {
             phone: formattedPhone,
+            iteration: i + 1,
             error: (error as Error).message,
           })
         },

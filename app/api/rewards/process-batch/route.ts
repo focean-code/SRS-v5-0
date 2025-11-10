@@ -2,6 +2,7 @@ import { sendDataBundle, mapToSupportedBundleSize } from "@/lib/africas-talking"
 import { createServiceRoleClient } from "@/lib/supabase-server"
 import { createServerClient } from "@supabase/ssr"
 import { cookies } from "next/headers"
+import { getRewardConfig } from "@/lib/reward-config"
 
 async function verifyAdminAuth() {
   try {
@@ -64,15 +65,11 @@ export async function POST(req: Request) {
       try {
         results.processed++
 
-        // Update to processing
         await client.from("rewards").update({ status: "processing" }).eq("id", reward.id)
 
-        // Look up SKU weight via feedback -> product_skus
-        // IMPORTANT: For 340g SKUs, we send 50MB twice (total 100MB) to match the displayed reward
-        // For 500g SKUs, we send 50MB three times (total 150MB) to match the displayed reward
-        // The customer only sees the total amount (100MB/150MB) - they don't know about multiple transactions
         let bundleSize = "50MB"
         let sendTimes = 1
+
         if (reward.feedback_id) {
           const { data: feedbackRow } = await client
             .from("feedback")
@@ -86,17 +83,14 @@ export async function POST(req: Request) {
               .select("weight")
               .eq("id", feedbackRow.sku_id)
               .single()
+
             const weight = ((skuRow as any)?.weight || "").toString().trim().toLowerCase()
-            if (weight === "340g") {
-              // Send 50MB bundle twice to total 100MB (customer sees 100MB on QR code)
-              bundleSize = "50MB"
-              sendTimes = 2
-            } else if (weight === "500g") {
-              // Send 50MB bundle three times to total 150MB (customer sees 150MB on QR code)
-              bundleSize = "50MB"
-              sendTimes = 3
+            const rewardConfig = getRewardConfig(weight)
+
+            if (rewardConfig) {
+              bundleSize = rewardConfig.bundleSize
+              sendTimes = rewardConfig.bundleCount
             } else {
-              // Fallback to amount-based mapping if weight is unknown
               bundleSize = mapToSupportedBundleSize(reward.amount)
               sendTimes = 1
             }

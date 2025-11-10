@@ -1,9 +1,10 @@
 "use client"
 
-import type React from "react"
-
 import { useEffect, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
+import { useForm, Controller } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { z } from "zod"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -23,8 +24,7 @@ interface QRData {
   }
   reward_description: string
   reward_amount: number
-  sku_weight?: string | null
-  bundle_size?: string | null
+  bundle_size: string
   campaign_id?: string | null
 }
 
@@ -37,6 +37,41 @@ interface CampaignQuestion {
   order: number
 }
 
+const createFormSchema = (questions: CampaignQuestion[]) => {
+  const customAnswersShape: Record<string, z.ZodTypeAny> = {}
+
+  questions.forEach((q) => {
+    if (q.order === 7) return // Skip thank you message
+
+    if (q.required) {
+      if (q.type === "checkbox") {
+        customAnswersShape[q.id] = z.array(z.string()).min(1, `Please select at least one option for: ${q.question}`)
+      } else {
+        customAnswersShape[q.id] = z.string().min(1, `Please answer: ${q.question}`)
+      }
+    } else {
+      if (q.type === "checkbox") {
+        customAnswersShape[q.id] = z.array(z.string()).optional()
+      } else {
+        customAnswersShape[q.id] = z.string().optional()
+      }
+    }
+  })
+
+  return z.object({
+    customerPhone: z
+      .string()
+      .min(10, "Phone number must be at least 10 digits")
+      .regex(/^(\+?254|0)?[17]\d{8}$/, "Invalid Kenyan phone number format"),
+    customAnswers: z.object(customAnswersShape),
+  })
+}
+
+type FormData = {
+  customerPhone: string
+  customAnswers: Record<string, any>
+}
+
 export default function FeedbackPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -47,10 +82,18 @@ export default function FeedbackPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [campaignQuestions, setCampaignQuestions] = useState<CampaignQuestion[]>([])
-  const [customAnswers, setCustomAnswers] = useState<Record<string, any>>({})
 
-  const [formData, setFormData] = useState({
-    customerPhone: "",
+  const {
+    control,
+    handleSubmit,
+    formState: { errors },
+    reset,
+  } = useForm<FormData>({
+    resolver: zodResolver(createFormSchema(campaignQuestions)),
+    defaultValues: {
+      customerPhone: "",
+      customAnswers: {},
+    },
   })
 
   useEffect(() => {
@@ -88,14 +131,23 @@ export default function FeedbackPage() {
                 (a: CampaignQuestion, b: CampaignQuestion) => a.order - b.order,
               )
               setCampaignQuestions(questions)
+
+              // Reset form with new validation schema
+              const defaultAnswers: Record<string, any> = {}
+              questions.forEach((q) => {
+                defaultAnswers[q.id] = q.type === "checkbox" ? [] : ""
+              })
+              reset({
+                customerPhone: "",
+                customAnswers: defaultAnswers,
+              })
             }
           } catch (err) {
-            console.error("[v0] Failed to load campaign questions:", err)
-            // Don't fail the whole form if questions fail to load
+            console.error("Failed to load campaign questions:", err)
           }
         }
       } catch (err) {
-        console.error("[v0] Failed to load QR data:", err)
+        console.error("Failed to load QR data:", err)
         setError(err instanceof Error ? err.message : "Failed to load product data")
       } finally {
         setLoading(false)
@@ -103,98 +155,43 @@ export default function FeedbackPage() {
     }
 
     loadQRData()
-  }, [qrId])
+  }, [qrId, reset])
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target
-    setFormData((prev) => ({ ...prev, [name]: value }))
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const onSubmit = async (data: FormData) => {
     setError(null)
-
-    if (!formData.customerPhone) {
-      setError("Please fill in all required fields")
-      return
-    }
-
-    // Validate required custom questions (excluding question 7 which is a thank you message, not a question)
-    const missingRequired = campaignQuestions
-      .filter((q) => q.required && q.order !== 7 && !customAnswers[q.id])
-      .map((q) => q.question)
-
-    if (missingRequired.length > 0) {
-      setError(`Please answer all required questions: ${missingRequired.join(", ")}`)
-      return
-    }
-
     setSubmitting(true)
 
     try {
       const calculateAverageRating = (): number => {
-        const ratingMap: Record<string, number> = {
-          poor: 1,
-          fair: 2,
-          good: 3,
-          "very good": 4,
-          excellent: 5,
-          "1": 1,
-          "2": 2,
-          "3": 3,
-          "4": 4,
-          "5": 5,
-        }
-
         const ratingQuestions = campaignQuestions.filter((q) => {
-          // Consider radio and select questions with rating-like options as rating questions
           if (q.type !== "radio" && q.type !== "select") return false
-          if (!q.options || q.options.length === 0) return false
-
-          // Check if options are numeric or rating labels
-          const hasNumericOptions = q.options.some((opt) => !isNaN(Number(opt)))
-          const hasRatingLabels = q.options.some((opt) =>
-            ["poor", "fair", "good", "very good", "excellent"].includes(opt.toLowerCase()),
-          )
-
-          return hasNumericOptions || hasRatingLabels
+          return q.options?.some((opt) => !isNaN(Number(opt)))
         })
 
-        if (ratingQuestions.length === 0) {
-          return 3 // Default to 3 if no rating questions
-        }
+        if (ratingQuestions.length === 0) return 3
 
         const ratings = ratingQuestions
           .map((q) => {
-            const answer = customAnswers[q.id]
-            if (!answer) return null
-
-            const answerStr = String(answer).toLowerCase()
-            const numericValue = ratingMap[answerStr] || Number(answer)
-
+            const answer = data.customAnswers[q.id]
+            const numericValue = Number(answer)
             return !isNaN(numericValue) ? numericValue : null
           })
           .filter((r): r is number => r !== null)
 
-        if (ratings.length === 0) {
-          return 3 // Default to 3 if no valid ratings
-        }
+        if (ratings.length === 0) return 3
 
-        const average = ratings.reduce((sum, r) => sum + r, 0) / ratings.length
-        return Math.round(average) // Round to nearest integer
+        return Math.round(ratings.reduce((sum, r) => sum + r, 0) / ratings.length)
       }
-
-      const calculatedRating = calculateAverageRating()
 
       const response = await fetch("/api/feedback/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           qrId,
-          customerPhone: formData.customerPhone,
-          customAnswers,
+          customerPhone: data.customerPhone,
+          customAnswers: data.customAnswers,
           campaignId: qrData?.campaign_id || null,
-          rating: calculatedRating, // Send calculated rating
+          rating: calculateAverageRating(),
         }),
       })
 
@@ -203,11 +200,9 @@ export default function FeedbackPage() {
         throw new Error(errorData.error || "Failed to submit feedback")
       }
 
-      const data = await response.json()
-
       // Success - redirect to success page
       router.push(
-        `/feedback/success?rewardAmount=${qrData?.reward_amount}&rewardDesc=${encodeURIComponent(qrData?.reward_description || "")}`,
+        `/feedback/success?rewardAmount=${qrData?.bundle_size}&rewardDesc=${encodeURIComponent(qrData?.reward_description || "")}`,
       )
     } catch (err) {
       console.error("Submission error:", err)
@@ -217,8 +212,8 @@ export default function FeedbackPage() {
     }
   }
 
-  const renderQuestion = (question: CampaignQuestion) => {
-    // Question 7 is a thank you message, not a question - display as informational
+  const renderQuestion = (question: CampaignQuestion, field: any) => {
+    // Question 7 is a thank you message, not a question
     if (question.order === 7) {
       return (
         <div className="p-4 bg-green-50 rounded-lg border border-green-200">
@@ -232,129 +227,93 @@ export default function FeedbackPage() {
     switch (question.type) {
       case "text":
         return (
-          <div className="space-y-1">
-            <Input
-              id={questionId}
-              value={customAnswers[question.id] || ""}
-              onChange={(e) => setCustomAnswers({ ...customAnswers, [question.id]: e.target.value })}
-              placeholder={question.question}
-              required={question.required}
-              disabled={submitting}
-              aria-label={question.question}
-              aria-required={question.required}
-            />
-            {question.required && (
-              <p className="text-xs text-gray-500">This field is required</p>
-            )}
-          </div>
+          <Input
+            {...field}
+            id={questionId}
+            placeholder={question.question}
+            disabled={submitting}
+            aria-label={question.question}
+            aria-required={question.required}
+          />
         )
       case "textarea":
         return (
-          <div className="space-y-1">
-            <Textarea
-              id={questionId}
-              value={customAnswers[question.id] || ""}
-              onChange={(e) => setCustomAnswers({ ...customAnswers, [question.id]: e.target.value })}
-              placeholder={question.question}
-              required={question.required}
-              disabled={submitting}
-              rows={4}
-              aria-label={question.question}
-              aria-required={question.required}
-            />
-            {question.required && (
-              <p className="text-xs text-gray-500">This field is required</p>
-            )}
-          </div>
+          <Textarea
+            {...field}
+            id={questionId}
+            placeholder={question.question}
+            disabled={submitting}
+            rows={4}
+            aria-label={question.question}
+            aria-required={question.required}
+          />
         )
       case "radio":
         return (
-          <div className="space-y-1">
-            <RadioGroup
-              value={customAnswers[question.id] || ""}
-              onValueChange={(value) => setCustomAnswers({ ...customAnswers, [question.id]: value })}
-              disabled={submitting}
-              aria-label={question.question}
-              aria-required={question.required}
-            >
-              <div className="space-y-2">
-                {question.options?.map((opt: string) => (
-                  <div key={opt} className="flex items-center space-x-2">
-                    <RadioGroupItem value={opt} id={`${questionId}-${opt}`} aria-label={opt} />
-                    <Label htmlFor={`${questionId}-${opt}`} className="font-normal cursor-pointer">
-                      {opt}
-                    </Label>
-                  </div>
-                ))}
-              </div>
-            </RadioGroup>
-            {question.required && (
-              <p className="text-xs text-gray-500">Please select one option</p>
-            )}
-          </div>
+          <RadioGroup
+            value={field.value}
+            onValueChange={field.onChange}
+            disabled={submitting}
+            aria-label={question.question}
+            aria-required={question.required}
+          >
+            <div className="space-y-2">
+              {question.options?.map((opt: string) => (
+                <div key={opt} className="flex items-center space-x-2">
+                  <RadioGroupItem value={opt} id={`${questionId}-${opt}`} aria-label={opt} />
+                  <Label htmlFor={`${questionId}-${opt}`} className="font-normal cursor-pointer">
+                    {opt}
+                  </Label>
+                </div>
+              ))}
+            </div>
+          </RadioGroup>
         )
       case "select":
         return (
-          <div className="space-y-1">
-            <Select
-              value={customAnswers[question.id] || ""}
-              onValueChange={(value) => setCustomAnswers({ ...customAnswers, [question.id]: value })}
-              disabled={submitting}
-            >
-              <SelectTrigger aria-label={question.question} aria-required={question.required}>
-                <SelectValue placeholder="Select an option" />
-              </SelectTrigger>
-              <SelectContent>
-                {question.options?.map((opt: string) => (
-                  <SelectItem key={opt} value={opt}>
-                    {opt}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {question.required && (
-              <p className="text-xs text-gray-500">Please select an option</p>
-            )}
-          </div>
+          <Select value={field.value} onValueChange={field.onChange} disabled={submitting}>
+            <SelectTrigger aria-label={question.question} aria-required={question.required}>
+              <SelectValue placeholder="Select an option" />
+            </SelectTrigger>
+            <SelectContent>
+              {question.options?.map((opt: string) => (
+                <SelectItem key={opt} value={opt}>
+                  {opt}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )
       case "checkbox":
         return (
-          <div className="space-y-2">
-            <div className="space-y-2" role="group" aria-label={question.question} aria-required={question.required}>
-              {question.options?.map((opt: string) => {
-                const checkboxId = `${questionId}-${opt}`
-                const currentValues = customAnswers[question.id] || []
-                const isChecked = Array.isArray(currentValues) && currentValues.includes(opt)
+          <div className="space-y-2" role="group" aria-label={question.question} aria-required={question.required}>
+            {question.options?.map((opt: string) => {
+              const checkboxId = `${questionId}-${opt}`
+              const currentValues = field.value || []
+              const isChecked = Array.isArray(currentValues) && currentValues.includes(opt)
 
-                return (
-                  <div key={opt} className="flex items-center space-x-2">
-                    <Checkbox
-                      id={checkboxId}
-                      checked={isChecked}
-                      onCheckedChange={(checked) => {
-                        const currentValues = (customAnswers[question.id] || []) as string[]
-                        if (checked) {
-                          setCustomAnswers({ ...customAnswers, [question.id]: [...currentValues, opt] })
-                        } else {
-                          setCustomAnswers({
-                            ...customAnswers,
-                            [question.id]: currentValues.filter((v) => v !== opt),
-                          })
-                        }
-                      }}
-                      disabled={submitting}
-                      aria-label={opt}
-                    />
-                    <Label htmlFor={checkboxId} className="font-normal cursor-pointer">
-                      {opt}
-                    </Label>
-                  </div>
-                )
-              })}
-            </div>
-            {question.required && (
-              <p className="text-xs text-gray-500">Please select at least one option</p>
-            )}
+              return (
+                <div key={opt} className="flex items-center space-x-2">
+                  <Checkbox
+                    id={checkboxId}
+                    checked={isChecked}
+                    onCheckedChange={(checked) => {
+                      const currentValues = (field.value || []) as string[]
+                      if (checked) {
+                        field.onChange([...currentValues, opt])
+                      } else {
+                        field.onChange(currentValues.filter((v) => v !== opt))
+                      }
+                    }}
+                    disabled={submitting}
+                    aria-label={opt}
+                  />
+                  <Label htmlFor={checkboxId} className="font-normal cursor-pointer">
+                    {opt}
+                  </Label>
+                </div>
+              )
+            })}
           </div>
         )
       default:
@@ -420,21 +379,7 @@ export default function FeedbackPage() {
               <div className="p-3 bg-green-50 rounded border border-green-200 mt-3">
                 <p className="text-sm font-semibold text-green-900">Reward for feedback:</p>
                 <p className="text-lg font-bold text-green-700">{qrData?.reward_description}</p>
-                {(() => {
-                  // Calculate displayed reward amount based on SKU weight
-                  // IMPORTANT: For 340g SKUs, customer sees 100MB (2×50MB bundles)
-                  // For 500g SKUs, customer sees 150MB (3×50MB bundles)
-                  let displayedRewardAmount = qrData?.reward_amount || 0
-                  const weightLower = String(qrData?.sku_weight || "").trim().toLowerCase()
-                  if (weightLower === "340g") {
-                    displayedRewardAmount = 100 // Customer receives 2×50MB = 100MB total
-                  } else if (weightLower === "500g") {
-                    displayedRewardAmount = 150 // Customer receives 3×50MB = 150MB total
-                  }
-                  return (
-                    <p className="text-sm text-green-600">Amount: {displayedRewardAmount}MB</p>
-                  )
-                })()}
+                <p className="text-sm text-green-600">Amount: {qrData?.bundle_size}</p>
               </div>
             </div>
 
@@ -445,22 +390,26 @@ export default function FeedbackPage() {
               </Alert>
             )}
 
-            {/* Feedback Form */}
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {/* Phone Number */}
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+              {/* Phone Number with validation */}
               <div className="space-y-2">
                 <Label htmlFor="customerPhone" className="text-sm font-semibold">
                   Phone Number *
                 </Label>
-                <Input
-                  id="customerPhone"
+                <Controller
                   name="customerPhone"
-                  placeholder="+254712345678 or 0712345678"
-                  value={formData.customerPhone}
-                  onChange={handleInputChange}
-                  required
-                  disabled={submitting}
+                  control={control}
+                  render={({ field }) => (
+                    <Input
+                      {...field}
+                      id="customerPhone"
+                      placeholder="+254712345678 or 0712345678"
+                      disabled={submitting}
+                      aria-invalid={!!errors.customerPhone}
+                    />
+                  )}
                 />
+                {errors.customerPhone && <p className="text-xs text-red-500">{errors.customerPhone.message}</p>}
                 <p className="text-xs text-gray-500">Enter your Kenyan phone number</p>
               </div>
 
@@ -478,7 +427,17 @@ export default function FeedbackPage() {
                           {question.question} {question.required && <span className="text-red-500">*</span>}
                         </Label>
                       )}
-                      {renderQuestion(question)}
+                      <Controller
+                        name={`customAnswers.${question.id}`}
+                        control={control}
+                        render={({ field }) => renderQuestion(question, field)}
+                      />
+                      {errors.customAnswers?.[question.id] && (
+                        <p className="text-xs text-red-500">{(errors.customAnswers[question.id] as any)?.message}</p>
+                      )}
+                      {question.required && !errors.customAnswers?.[question.id] && question.order !== 7 && (
+                        <p className="text-xs text-gray-500">This field is required</p>
+                      )}
                     </div>
                   ))}
                 </div>

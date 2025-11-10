@@ -3,6 +3,7 @@ import { createServiceRoleClient } from "@/lib/supabase-server"
 import { successResponse, errorResponse } from "@/lib/api-response"
 import { logger } from "@/lib/logger"
 import { z } from "zod"
+import { getRewardConfig } from "@/lib/reward-config"
 
 const processRewardSchema = z.object({
   rewardId: z.string().uuid(),
@@ -40,9 +41,6 @@ export async function POST(req: Request) {
       }
 
       // Determine bundle strategy based on SKU weight if available
-      // IMPORTANT: For 340g SKUs, we send 50MB twice (total 100MB) to match the displayed reward
-      // For 500g SKUs, we send 50MB three times (total 150MB) to match the displayed reward
-      // The customer only sees the total amount (100MB/150MB) - they don't know about multiple transactions
       let bundleSize = "50MB"
       let sendTimes = 1
 
@@ -61,24 +59,19 @@ export async function POST(req: Request) {
             .single()
 
           const weight = ((skuRow as any)?.weight || "").toString().trim().toLowerCase()
-          if (weight === "340g") {
-            // Send 50MB bundle twice to total 100MB (customer sees 100MB on QR code)
-            bundleSize = "50MB"
-            sendTimes = 2
-            logger.info("340g SKU detected - sending 50MB bundle twice (total 100MB)", {
-              rewardId,
-              phoneNumber,
-              displayedAmount: rewardRow.amount,
-            })
-          } else if (weight === "500g") {
-            // Send 50MB bundle three times to total 150MB (customer sees 150MB on QR code)
-            bundleSize = "50MB"
-            sendTimes = 3
-            logger.info("500g SKU detected - sending 50MB bundle three times (total 150MB)", {
-              rewardId,
-              phoneNumber,
-              displayedAmount: rewardRow.amount,
-            })
+          const rewardConfig = getRewardConfig(weight)
+
+          if (rewardConfig) {
+            bundleSize = rewardConfig.bundleSize
+            sendTimes = rewardConfig.bundleCount
+            logger.info(
+              `${weight} SKU detected - sending ${bundleSize} ${sendTimes} times (total ${rewardConfig.displayAmount}MB)`,
+              {
+                rewardId,
+                phoneNumber,
+                displayedAmount: rewardRow.amount,
+              },
+            )
           } else {
             bundleSize = mapToSupportedBundleSize(rewardRow.amount)
             sendTimes = 1
