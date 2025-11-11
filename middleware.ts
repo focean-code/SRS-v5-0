@@ -15,10 +15,8 @@ export async function middleware(request: NextRequest) {
       return response
     }
 
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!, // Use service role to check user metadata
-    )
+    // Create Supabase client for middleware
+    const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
 
     // Check for authenticated session
     const {
@@ -27,23 +25,6 @@ export async function middleware(request: NextRequest) {
 
     if (!session) {
       return NextResponse.redirect(new URL("/admin/login", request.url))
-    }
-
-    // Check if user has admin role in metadata
-    const userId = session.user.id
-    const { data: userData, error } = await supabase.auth.admin.getUserById(userId)
-
-    if (error || !userData) {
-      console.error("[v0] Failed to fetch user data:", error)
-      return NextResponse.redirect(new URL("/admin/login", request.url))
-    }
-
-    // Check for admin role in user metadata
-    const userRole = userData.user.user_metadata?.role || userData.user.app_metadata?.role
-
-    if (userRole !== "admin") {
-      console.warn("[v0] Unauthorized access attempt to admin area:", { userId, role: userRole })
-      return NextResponse.json({ error: "Unauthorized: Admin access required" }, { status: 403 })
     }
   }
 

@@ -1,15 +1,13 @@
-import { getQRCodeData } from "@/lib/db-utils"
+import { checkDuplicateSubmission } from "@/lib/qr-utils"
+import { getQRCodeData, markQRCodeAsUsed, createFeedback, createReward } from "@/lib/db-utils"
 import { feedbackSchema } from "@/lib/validation"
 import { rateLimit } from "@/lib/rate-limit"
 import { successResponse, errorResponse, validationErrorResponse, rateLimitResponse } from "@/lib/api-response"
 import { logger } from "@/lib/logger"
 import { sendDataBundle, mapToSupportedBundleSize } from "@/lib/africas-talking"
 import { createServiceRoleClient } from "@/lib/supabase-server"
-import { getRewardConfig } from "@/lib/reward-config"
 
 export async function POST(req: Request) {
-  const client = await createServiceRoleClient()
-
   try {
     const body = await req.json()
 
@@ -39,6 +37,13 @@ export async function POST(req: Request) {
     const rating = body.rating || validation.data.rating || 3
     const campaignId = body.campaignId || null
 
+    // Check for duplicate submission
+    const isDuplicate = await checkDuplicateSubmission(customerPhone, qrId)
+    if (isDuplicate) {
+      logger.warn("Duplicate feedback submission attempt", { phone: customerPhone, qrId })
+      return errorResponse("You have already submitted feedback for this product", 409)
+    }
+
     // Get QR code and product data
     const qrData = await getQRCodeData(qrId)
     if (!qrData || qrData.is_used) {
@@ -46,45 +51,39 @@ export async function POST(req: Request) {
       return errorResponse("QR code is invalid or already used", 404)
     }
 
-    // This ensures feedback, reward, and QR marking happen together or not at all
-    const { data: result, error: rpcError } = await client.rpc("submit_feedback_atomic", {
-      p_campaign_id: campaignId,
-      p_qr_id: qrId,
-      p_sku_id: qrData.sku_id,
-      p_customer_name: customerName || "Anonymous",
-      p_customer_phone: customerPhone,
-      p_rating: rating ? Math.min(Math.max(rating, 1), 5) : 3,
-      p_comment: null,
-      p_custom_answers: customAnswers || {},
-      p_verified: true,
-      p_reward_name: qrData.product_skus?.reward_description || "Reward",
-      p_reward_amount: qrData.product_skus?.reward_amount || 0,
-    })
-
-    if (rpcError) {
-      logger.error("Atomic feedback submission failed", { error: rpcError })
-
-      // Handle specific error cases
-      if (rpcError.message.includes("QR code already used")) {
-        return errorResponse("QR code is already used", 409)
-      }
-      if (rpcError.message.includes("Duplicate submission")) {
-        return errorResponse("You have already submitted feedback for this product", 409)
-      }
-
-      throw rpcError
+    // Create feedback record
+    const feedbackData = {
+      campaign_id: campaignId,
+      qr_id: qrId,
+      sku_id: qrData.sku_id,
+      customer_name: customerName || "Anonymous",
+      customer_phone: customerPhone,
+      rating: rating ? Math.min(Math.max(rating, 1), 5) : 3,
+      comment: null, // No comment field
+      custom_answers: customAnswers || {},
+      verified: true,
     }
 
-    const feedbackId = result.feedback_id
-    const rewardId = result.reward_id
+    const feedback = await createFeedback(feedbackData)
 
-    // Fetch the created records for response
-    const { data: feedback } = await client.from("feedback").select("*").eq("id", feedbackId).single()
-    const { data: reward } = await client.from("rewards").select("*").eq("id", rewardId).single()
+    // Create reward record
+    const rewardData = {
+      feedback_id: feedback.id,
+      qr_id: qrId,
+      customer_phone: customerPhone,
+      reward_name: qrData.product_skus?.reward_description || "Reward",
+      amount: qrData.product_skus?.reward_amount || 0,
+      status: "pending",
+    }
+
+    const reward = await createReward(rewardData)
 
     try {
-      console.log("[v0] Starting automatic bundle sending for reward:", rewardId)
+      const client = await createServiceRoleClient()
 
+      console.log("[v0] Starting automatic bundle sending for reward:", reward.id)
+
+      // Determine bundle strategy based on SKU weight
       let bundleSize = "50MB"
       let sendTimes = 1
 
@@ -92,14 +91,14 @@ export async function POST(req: Request) {
         const { data: skuRow } = await client.from("product_skus").select("weight").eq("id", qrData.sku_id).single()
 
         const weight = ((skuRow as any)?.weight || "").toString().trim().toLowerCase()
-        const rewardConfig = getRewardConfig(weight)
-
-        if (rewardConfig) {
-          bundleSize = rewardConfig.bundleSize
-          sendTimes = rewardConfig.bundleCount
-          console.log(
-            `[v0] ${weight} SKU detected - sending ${bundleSize} ${sendTimes} times (total ${rewardConfig.displayAmount}MB)`,
-          )
+        if (weight === "340g") {
+          bundleSize = "50MB"
+          sendTimes = 2
+          console.log("[v0] 340g SKU detected - sending 50MB twice (total 100MB)")
+        } else if (weight === "500g") {
+          bundleSize = "50MB"
+          sendTimes = 3
+          console.log("[v0] 500g SKU detected - sending 50MB three times (total 150MB)")
         } else {
           bundleSize = mapToSupportedBundleSize(reward.amount)
           sendTimes = 1
@@ -118,9 +117,10 @@ export async function POST(req: Request) {
           status: "processing",
           updated_at: new Date().toISOString(),
         })
-        .eq("id", rewardId)
+        .eq("id", reward.id)
 
-      const result = await sendDataBundle(customerPhone, bundleSize, sendTimes, rewardId)
+      // Send the data bundle
+      const result = await sendDataBundle(customerPhone, bundleSize, sendTimes)
 
       console.log("[v0] Data bundle sent successfully:", result.data?.transactionId)
 
@@ -133,11 +133,11 @@ export async function POST(req: Request) {
           transaction_id: result.data?.transactionId || null,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", rewardId)
+        .eq("id", reward.id)
 
       logger.info("Feedback submitted and bundle sent automatically", {
-        feedbackId,
-        rewardId,
+        feedbackId: feedback.id,
+        rewardId: reward.id,
         transactionId: result.data?.transactionId,
         phone: customerPhone,
         calculatedRating: rating,
@@ -146,13 +146,13 @@ export async function POST(req: Request) {
       return successResponse(
         {
           feedback: {
-            id: feedbackId,
-            customer_name: feedback?.customer_name,
-            rating: feedback?.rating,
+            id: feedback.id,
+            customer_name: feedback.customer_name,
+            rating: feedback.rating,
           },
           reward: {
-            id: rewardId,
-            amount: reward?.amount,
+            id: reward.id,
+            amount: reward.amount,
             status: "sent",
             transactionId: result.data?.transactionId,
           },
@@ -162,36 +162,40 @@ export async function POST(req: Request) {
     } catch (bundleError) {
       // If bundle sending fails, log error but don't fail the whole request
       logger.error("Failed to send data bundle automatically", {
-        rewardId: rewardId,
+        rewardId: reward.id,
         error: bundleError instanceof Error ? bundleError.message : String(bundleError),
       })
 
       // Mark reward as failed
+      const client = await createServiceRoleClient()
       await client
         .from("rewards")
         .update({
           status: "failed",
           updated_at: new Date().toISOString(),
         })
-        .eq("id", rewardId)
+        .eq("id", reward.id)
 
       // Still return success for feedback, but with failed reward status
       return successResponse(
         {
           feedback: {
-            id: feedbackId,
-            customer_name: feedback?.customer_name,
-            rating: feedback?.rating,
+            id: feedback.id,
+            customer_name: feedback.customer_name,
+            rating: feedback.rating,
           },
           reward: {
-            id: rewardId,
-            amount: reward?.amount,
+            id: reward.id,
+            amount: reward.amount,
             status: "failed",
           },
         },
         "Feedback submitted but bundle sending failed. Please contact support.",
       )
     }
+
+    // Mark QR code as used
+    await markQRCodeAsUsed(qrId, customerPhone)
   } catch (error) {
     logger.error("Feedback submission error", { error: error instanceof Error ? error.message : String(error) })
     return errorResponse("Failed to submit feedback", 500, error instanceof Error ? error.message : "Unknown error")
