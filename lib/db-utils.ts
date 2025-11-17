@@ -61,7 +61,7 @@ export async function createFeedback(feedbackData: any) {
     throw new Error("Failed to create feedback")
   }
 
-  logger.info("Feedback created", { feedbackId: data?.id, phone: feedbackData.customer_phone })
+  logger.info("Feedback created", { feedbackId: data.id, phone: feedbackData.customer_phone })
   return data
 }
 
@@ -75,7 +75,7 @@ export async function createReward(rewardData: any) {
     throw new Error("Failed to create reward")
   }
 
-  logger.info("Reward created", { rewardId: data?.id, phone: rewardData.customer_phone })
+  logger.info("Reward created", { rewardId: data.id, phone: rewardData.customer_phone })
   return data
 }
 
@@ -88,7 +88,7 @@ export async function getRewardByFeedbackId(feedbackId: string) {
     logger.error("Error fetching reward", { feedbackId, error: error.message })
   }
 
-  return data ?? null
+  return data || null
 }
 
 export async function updateRewardStatus(rewardId: string, status: string, sentAt?: boolean) {

@@ -29,16 +29,15 @@ export default function RewardsPage() {
 
     try {
       const response = await fetch(`/api/rewards/check?phone=${encodeURIComponent(phoneNumber)}`)
-      const parsed = await parseApiResponse(response)
 
       if (!response.ok) {
-        throw new Error(extractError(parsed) || "Failed to fetch rewards")
+        throw new Error("Failed to fetch rewards")
       }
 
-      const rewardsData = parsed.rewards || parsed.data?.rewards || []
-      setRewards(rewardsData)
+      const data = await response.json()
+      setRewards(data.rewards || [])
 
-      if ((rewardsData || []).length === 0) {
+      if (data.rewards.length === 0) {
         setMessage({ type: "error", text: "No rewards found for this phone number" })
       }
     } catch (error) {
@@ -50,32 +49,6 @@ export default function RewardsPage() {
     } finally {
       setLoading(false)
     }
-  }
-
-  // Helpers to parse API responses and extract errors (covers wrapped and raw responses)
-  async function parseApiResponse(res: Response) {
-    try {
-      const text = await res.text()
-      if (!text) return {}
-      try {
-        return JSON.parse(text)
-      } catch {
-        return { text }
-      }
-    } catch (e) {
-      return { error: "Failed to read response" }
-    }
-  }
-
-  function extractError(parsed: any) {
-    if (!parsed) return null
-    if (typeof parsed === "string") return parsed
-    if (parsed.error) return parsed.error
-    if (parsed?.data?.error) return parsed.data.error
-    if (parsed?.message) return parsed.message
-    if (parsed?.meta?.errors) return JSON.stringify(parsed.meta.errors)
-    if (parsed.text) return parsed.text
-    return null
   }
 
   const handleClaimReward = async (rewardId: string) => {

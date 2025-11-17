@@ -33,14 +33,14 @@ function log(step: string, status: "PASS" | "FAIL", data?: any, error?: string) 
 
 async function testE2EFlow() {
   console.log("\n🚀 Starting End-to-End Test for Shopper Reward System v5.0\n")
-  console.log("=".repeat(60))
+  console.log("=" * 60)
 
   try {
     // Step 1: Check Supabase Connection
     console.log("\n1️⃣ Testing Database Connection...")
     const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 
-    const { data, error: connectionError } = await (supabase.from("products").select("*", { count: "exact", head: true }) as any)
+    const { data: tables, error: connectionError } = await supabase.from("products").select("count")
 
     if (connectionError) {
       log("Database Connection", "FAIL", undefined, connectionError.message)
@@ -51,7 +51,7 @@ async function testE2EFlow() {
     // Step 2: Create Test Product and SKU
     console.log("\n2️⃣ Creating Test Product and SKU...")
 
-    const { data: productData, error: productError } = await (supabase
+    const { data: productData, error: productError } = await supabase
       .from("products")
       .insert([
         {
@@ -61,32 +61,32 @@ async function testE2EFlow() {
         },
       ])
       .select()
-      .single() as any)
+      .single()
 
     if (productError) {
-      log("Create Product", "FAIL", undefined, productError?.message)
+      log("Create Product", "FAIL", undefined, productError.message)
       return printSummary()
     }
-    log("Create Product", "PASS", { productId: productData?.id })
+    log("Create Product", "PASS", { productId: productData.id })
 
-    const { data: skuData, error: skuError } = await (supabase
+    const { data: skuData, error: skuError } = await supabase
       .from("product_skus")
       .insert([
         {
-          product_id: productData?.id,
+          product_id: productData.id,
           weight: "500G",
           reward_amount: 150,
           reward_description: "FREE SAFARICOM DATA",
         },
       ])
       .select()
-      .single() as any)
+      .single()
 
     if (skuError) {
-      log("Create SKU", "FAIL", undefined, skuError?.message)
+      log("Create SKU", "FAIL", undefined, skuError.message)
       return printSummary()
     }
-    log("Create SKU", "PASS", { skuId: skuData?.id, rewardAmount: skuData?.reward_amount })
+    log("Create SKU", "PASS", { skuId: skuData.id, rewardAmount: skuData.reward_amount })
 
     // Step 3: Generate Test QR Code
     console.log("\n3️⃣ Generating Test QR Code...")
@@ -94,22 +94,22 @@ async function testE2EFlow() {
     const qrId = `test-qr-${Date.now()}`
     const qrUrl = `${APP_URL}/qr/${qrId}`
 
-    const { data: qrData, error: qrError } = await (supabase
+    const { data: qrData, error: qrError } = await supabase
       .from("qr_codes")
       .insert([
         {
           id: qrId,
-          sku_id: skuData?.id,
+          sku_id: skuData.id,
           url: qrUrl,
           batch_number: 999,
           is_used: false,
         },
       ])
       .select()
-      .single() as any)
+      .single()
 
     if (qrError) {
-      log("Generate QR Code", "FAIL", undefined, qrError?.message)
+      log("Generate QR Code", "FAIL", undefined, qrError.message)
       return printSummary()
     }
     log("Generate QR Code", "PASS", { qrId, url: qrUrl })
@@ -117,38 +117,38 @@ async function testE2EFlow() {
     // Step 4: Validate QR Code (simulate scan)
     console.log("\n4️⃣ Validating QR Code (Simulating Scan)...")
 
-    const { data: validQr, error: validateError } = await (supabase
+    const { data: validQr, error: validateError } = await supabase
       .from("qr_codes")
       .select("id, is_used, product_skus(reward_amount, weight, products(name))")
       .eq("id", qrId)
-      .single() as any)
+      .single()
 
     if (validateError) {
-      log("QR Code Validation", "FAIL", undefined, validateError?.message)
+      log("QR Code Validation", "FAIL", undefined, validateError.message)
       return printSummary()
     }
 
-    if (validQr?.is_used) {
+    if (validQr.is_used) {
       log("QR Code Validation", "FAIL", undefined, "QR code already used")
       return printSummary()
     }
 
     log("QR Code Validation", "PASS", {
       qrFound: true,
-      rewardAmount: validQr?.product_skus?.[0]?.reward_amount,
-      skuSize: validQr?.product_skus?.[0]?.weight,
+      rewardAmount: validQr.product_skus[0].reward_amount,
+      skuSize: validQr.product_skus[0].weight,
     })
 
     // Step 5: Submit Feedback
     console.log("\n5️⃣ Submitting Customer Feedback...")
 
     const testPhone = "+254712345678"
-    const { data: feedbackData, error: feedbackError } = await (supabase
+    const { data: feedbackData, error: feedbackError } = await supabase
       .from("feedback")
       .insert([
         {
           qr_code_id: qrId,
-          sku_id: skuData?.id,
+          sku_id: skuData.id,
           customer_name: "Test Customer",
           customer_phone: testPhone,
           rating: 5,
@@ -159,23 +159,23 @@ async function testE2EFlow() {
         },
       ])
       .select()
-      .single() as any)
+      .single()
 
     if (feedbackError) {
-      log("Submit Feedback", "FAIL", undefined, feedbackError?.message)
+      log("Submit Feedback", "FAIL", undefined, feedbackError.message)
       return printSummary()
     }
-    log("Submit Feedback", "PASS", { feedbackId: feedbackData?.id, phone: testPhone })
+    log("Submit Feedback", "PASS", { feedbackId: feedbackData.id, phone: testPhone })
 
     // Step 6: Create Reward
     console.log("\n6️⃣ Creating Reward Record...")
 
-    const rewardAmount = validQr?.product_skus?.[0]?.reward_amount
-    const { data: rewardData, error: rewardError } = await (supabase
+    const rewardAmount = validQr.product_skus[0].reward_amount
+    const { data: rewardData, error: rewardError } = await supabase
       .from("rewards")
       .insert([
         {
-          feedback_id: feedbackData?.id,
+          feedback_id: feedbackData.id,
           customer_phone: testPhone,
           amount: rewardAmount,
           reward_name: `${rewardAmount}MB Safaricom Data`,
@@ -183,17 +183,18 @@ async function testE2EFlow() {
         },
       ])
       .select()
-      .single() as any)
+      .single()
 
     if (rewardError) {
-      log("Create Reward", "FAIL", undefined, rewardError?.message)
+      log("Create Reward", "FAIL", undefined, rewardError.message)
       return printSummary()
     }
-    log("Create Reward", "PASS", { rewardId: rewardData?.id, status: "pending", amount: `${rewardAmount}MB` })
+    log("Create Reward", "PASS", { rewardId: rewardData.id, status: "pending", amount: `${rewardAmount}MB` })
 
-    // Step 7: Marking QR Code as Used...
+    // Step 7: Mark QR as Used
+    console.log("\n7️⃣ Marking QR Code as Used...")
 
-    const { error: updateError } = await (supabase as any)
+    const { error: updateError } = await supabase
       .from("qr_codes")
       .update({
         is_used: true,
@@ -203,7 +204,7 @@ async function testE2EFlow() {
       .eq("id", qrId)
 
     if (updateError) {
-      log("Mark QR as Used", "FAIL", undefined, updateError?.message)
+      log("Mark QR as Used", "FAIL", undefined, updateError.message)
       return printSummary()
     }
     log("Mark QR as Used", "PASS", { qrId, usedBy: testPhone })
@@ -212,13 +213,13 @@ async function testE2EFlow() {
     console.log("\n8️⃣ Processing Reward (Sending Data Bundle)...")
 
     // Update reward status to processing
-    const { error: processingError } = await (supabase as any)
+    const { error: processingError } = await supabase
       .from("rewards")
       .update({ status: "processing" })
-      .eq("id", rewardData?.id)
+      .eq("id", rewardData.id)
 
     if (processingError) {
-      log("Update Reward to Processing", "FAIL", undefined, processingError?.message)
+      log("Update Reward to Processing", "FAIL", undefined, processingError.message)
       return printSummary()
     }
 
@@ -227,7 +228,7 @@ async function testE2EFlow() {
     // The customer only sees the total amount (100MB/150MB) - they don't know about multiple transactions
     let bundleSize = "50MB"
     let sendTimes = 1
-    const skuWeight = validQr?.product_skus?.[0]?.weight?.toString().trim().toLowerCase() || ""
+    const skuWeight = validQr.product_skus[0].weight?.toString().trim().toLowerCase() || ""
 
     if (skuWeight === "340g") {
       // Send 50MB bundle twice to total 100MB (customer sees 100MB on QR code)
@@ -241,7 +242,7 @@ async function testE2EFlow() {
       console.log(`   📦 500g SKU detected: Sending 50MB × 3 = 150MB`)
     } else {
       // Fallback to amount-based mapping if weight is unknown
-      bundleSize = rewardAmount && rewardAmount > 500 ? "1GB" : rewardAmount && rewardAmount > 200 ? "500MB" : "150MB"
+      bundleSize = rewardAmount > 500 ? "1GB" : rewardAmount > 200 ? "500MB" : "150MB"
       sendTimes = 1
       console.log(`   📦 Unknown weight: Sending ${bundleSize} (mapped from ${rewardAmount}MB)`)
     }
@@ -263,28 +264,28 @@ async function testE2EFlow() {
     // Step 9: Update Reward to Sent
     console.log("\n9️⃣ Updating Reward Status to Sent...")
 
-    const { error: sentError } = await (supabase as any)
+    const { error: sentError } = await supabase
       .from("rewards")
       .update({
         status: "sent",
         sent_at: new Date().toISOString(),
       })
-      .eq("id", rewardData?.id)
+      .eq("id", rewardData.id)
 
     if (sentError) {
-      log("Update Reward to Sent", "FAIL", undefined, sentError?.message)
+      log("Update Reward to Sent", "FAIL", undefined, sentError.message)
       return printSummary()
     }
-    log("Update Reward to Sent", "PASS", { rewardId: rewardData?.id, status: "sent" })
+    log("Update Reward to Sent", "PASS", { rewardId: rewardData.id, status: "sent" })
 
     // Step 10: Verify Complete Flow
     console.log("\n🔟 Verifying Complete Flow...")
 
-    const { data: finalQr } = await (supabase as any).from("qr_codes").select("*").eq("id", qrId).single()
+    const { data: finalQr } = await supabase.from("qr_codes").select("*").eq("id", qrId).single()
 
-    const { data: finalReward } = await (supabase as any).from("rewards").select("*").eq("id", rewardData?.id).single()
+    const { data: finalReward } = await supabase.from("rewards").select("*").eq("id", rewardData.id).single()
 
-    const { data: finalFeedback } = await (supabase as any).from("feedback").select("*").eq("id", feedbackData?.id).single()
+    const { data: finalFeedback } = await supabase.from("feedback").select("*").eq("id", feedbackData.id).single()
 
     if (finalQr?.is_used && finalReward?.status === "sent" && finalFeedback?.id) {
       log("Complete Flow Verification", "PASS", {
@@ -299,9 +300,9 @@ async function testE2EFlow() {
     // Step 11: Analytics Check
     console.log("\n📊 Checking Analytics...")
 
-    const { count: totalFeedback } = await (supabase as any).from("feedback").select("id", { count: "exact", head: true })
+    const { count: totalFeedback } = await supabase.from("feedback").select("id", { count: "exact", head: true })
 
-    const { count: sentRewards } = await (supabase as any)
+    const { count: sentRewards } = await supabase
       .from("rewards")
       .select("id", { count: "exact", head: true })
       .eq("status", "sent")
@@ -318,7 +319,7 @@ async function testE2EFlow() {
 }
 
 function printSummary() {
-  console.log("\n" + "=".repeat(60))
+  console.log("\n" + "=" * 60)
   console.log("\n📋 TEST SUMMARY\n")
 
   const passed = results.filter((r) => r.status === "PASS").length
@@ -339,7 +340,7 @@ function printSummary() {
       })
   }
 
-  console.log("\n" + "=".repeat(60))
+  console.log("\n" + "=" * 60)
   console.log("\n✨ Test run complete!\n")
 
   // Clean up test data

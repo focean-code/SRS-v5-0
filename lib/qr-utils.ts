@@ -49,7 +49,7 @@ export async function validateQRToken(qrId: string) {
     return null
   }
 
-  if (!data || data?.is_used) {
+  if (!data || data.is_used) {
     console.warn("QR code already used or invalid:", qrId)
     return null
   }

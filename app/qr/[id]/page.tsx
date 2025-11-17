@@ -29,14 +29,14 @@ export default function QRPage({ params }: { params: { id: string } }) {
     const validateQR = async () => {
       try {
         const response = await fetch(`/api/qr/validate?id=${params.id}`)
-        const parsed = await parseApiResponse(response)
 
         if (!response.ok) {
-          throw new Error(extractError(parsed) || "Invalid QR code")
+          const errorData = await response.json()
+          throw new Error(errorData.error || "Invalid QR code")
         }
 
-        const qr = parsed.qr || parsed.data?.qr || null
-        setQrData(qr)
+        const data = await response.json()
+        setQrData(data.qr)
 
         // Redirect to feedback form
         setTimeout(() => {
@@ -51,32 +51,6 @@ export default function QRPage({ params }: { params: { id: string } }) {
 
     validateQR()
   }, [params.id, router])
-
-  // Helpers to parse API responses and extract errors (covers wrapped and raw responses)
-  async function parseApiResponse(res: Response) {
-    try {
-      const text = await res.text()
-      if (!text) return {}
-      try {
-        return JSON.parse(text)
-      } catch {
-        return { text }
-      }
-    } catch (e) {
-      return { error: "Failed to read response" }
-    }
-  }
-
-  function extractError(parsed: any) {
-    if (!parsed) return null
-    if (typeof parsed === "string") return parsed
-    if (parsed.error) return parsed.error
-    if (parsed?.data?.error) return parsed.data.error
-    if (parsed?.message) return parsed.message
-    if (parsed?.meta?.errors) return JSON.stringify(parsed.meta.errors)
-    if (parsed.text) return parsed.text
-    return null
-  }
 
   if (loading && !error) {
     return (

@@ -1,15 +1,14 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Loader2, AlertCircle, Lock } from "lucide-react"
+import { Loader2, AlertCircle, Lock } from 'lucide-react'
 
 export default function AdminLoginPage() {
   const router = useRouter()
@@ -32,34 +31,28 @@ export default function AdminLoginPage() {
     setLoading(true)
 
     try {
+      console.log("[v0] Submitting login request...")
+      
       const response = await fetch("/api/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: trimmedEmail, password: trimmedPassword }),
-        credentials: "include", // include cookies in request
+        credentials: "include",
       })
 
       const data = await response.json()
+      console.log("[v0] Login API response:", { ok: response.ok, data })
 
       if (!response.ok) {
         throw new Error(data.error || "Login failed")
       }
 
       console.log("Login successful")
-      // Navigate to admin dashboard. The middleware will verify the httpOnly cookies.
-      router.replace("/admin")
-      // Hard fallback in case client routing is sandboxed/blocked (e.g., preview iframes)
-      setTimeout(() => {
-        if (typeof window !== "undefined" && window.location.pathname !== "/admin") {
-          window.location.assign("/admin")
-        }
-      }, 0)
-      // Hard fallback in case client routing is sandboxed/blocked (e.g., preview iframes)
-      setTimeout(() => {
-        if (typeof window !== "undefined" && window.location.pathname !== "/admin") {
-          window.location.assign("/admin")
-        }
-      }, 0)
+      
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
+      console.log("[v0] Redirecting to admin page...")
+      window.location.href = "/admin"
     } catch (err) {
       console.error("[v0] Login error:", err)
       setError(err instanceof Error ? err.message : "Login failed")

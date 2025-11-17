@@ -33,34 +33,18 @@ export async function POST(req: NextRequest) {
       return errorResponse("No session created", 401)
     }
 
+    logger.info("Admin login successful", { 
+      email, 
+      userId: data.user.id,
+      hasSession: !!data.session,
+      sessionExpiry: data.session.expires_at
+    })
+
     const cookieStore = await cookies()
+    const allCookies = cookieStore.getAll()
+    const supabaseCookies = allCookies.filter(c => c.name.includes('supabase'))
+    console.log("[v0] Supabase cookies set:", supabaseCookies.map(c => c.name))
 
-    // Set the access token cookie
-    cookieStore.set({
-      name: "sb-access-token",
-      value: data.session.access_token,
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: "/",
-    })
-
-    // Set the refresh token cookie
-    cookieStore.set({
-      name: "sb-refresh-token",
-      value: data.session.refresh_token,
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: "/",
-    })
-
-    logger.info("Admin login successful", { email, userId: data.user.id })
-
-    // Return only user info - tokens are stored in httpOnly cookies
-    // No tokens exposed to the client
     return successResponse(
       {
         user: {
